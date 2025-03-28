@@ -1,0 +1,600 @@
+Các role checklist db:
+1. Phiên bản database được hỗ trợ lâu dài tại thời điểm bàn giao => Phiên bản được hỗ trợ lâu dài không End Of Life (các phiên bản sau được hỗ trợ lâu dài: 10.11, 11.4, 10.6)
+Sử dụng command: select version();
+show variables like ""data%"";
+show variables like ""%log%"";
+
+3. Cơ chế backup sử dụng một trong các trường hợp sau:
+- MariaDB: sử dụng Mariabackup
+- MySQL (khác Enterprise): sử dụng Xtrabackup
+- MySQL (Enterprise): MySQL Enterprise Backup
+Hoặc đảm bảo cơ chế Point In Time Recovery cho database.
+Job backup phải được thực hiện hàng ngày"	Kiểm tra trực tiếp job backup trong crontab, Đúng phần mềm và tần suất backup đảm bảo cơ chế PITR
+
+4. Trạng thái đồng bộ dữ liệu giữa các node database bình thường:
+- Với mô hình Galera Cluster, sử dụng command: show status like '%wsrep_%';
+- Với mô hình Replication, sử dụng command: show slave status \G;"
+Kết quả mong muốn: Không có trạng thái lỗi
+
+5. Cấu hình gcache size với mô hình Galera cluster tối thiểu 5GB. Có thể cấu hình cao hơn với database có số lượng giao dịch lớn wsrep_provider_options="gcache.size=5120M"
+- Sử dụng command: show variables like '%wsrep_provider_options%';
+
+6. Cấu hình storage engine mặc định: default-storage-engine = innodb
+Nếu sử dụng storage engine khác phải đảm bảo phù hợp với mô hình, khuyến cáo của hãng và không làm vi phạm các tiêu chí khác trong checklist.	
+Sử dụng các command sau:
+more /etc/my.cnf |grep default-storage
+show variables like '%default_storage_engine%';
+select table_schema,table_name,engine,table_rows from information_schema.tables where table_schema not in ('information_schema','mysql','performance_schema','test') and engine not like 'InnoDB';"
+
+7. Cấu hình bufferpool: innodb_buffer_pool_size = 65-70% (Server’s Memory)	 
+Sử dụng command: SELECT @@innodb_buffer_pool_size/1024/1024/1024;
+
+8. Cấu hình enable binlog
+log-bin=binlog
+expire_logs_days=7
+binlog_format = ROW
+max_binlog_size = 512M"	
+Sử dụng các command sau:
+show variables where variable_name like '%log_bin%';
+show variables where variable_name like '%expire_logs_days%';
+show variables where variable_name like '%binlog_format%';
+show variables where variable_name like '%max_binlog_size%';"	
+Kết quả mong muốn đầu ra
+log_bin=ON
+expire_logs_days=7
+binlog_format = ROW
+max_binlog_size = 512M"
+
+9. "Cấu hình innodb log file, table name, table/partition sử dụng 1 datafile, slow log
+Sử dụng các command sau:
+show variables like "%innodb_log_file_size%";
+show variables like "%lower_case_table_names%";
+show variables like "%innodb_file_per_table%";
+show variables like '%slow_query_log%';
+
+Kết quả mong muốn đầu ra:
+innodb_log_file_size = 256M"	
+lower_case_table_names=1"
+innodb_file_per_table = ON"
+slow_query_log = 1
+slow_query_log_file = /log/mysql/mysqld.slow.log
+
+10. Cấu hình performance schema, user statistic, max_connection từ 5000-10000
+Sử dụng các command sau:
+show variables like "%performance_schema%";
+show variables like "%userstat%";		
+show variables like "%max_connections%";
+
+Kết quả mong muốn đầu ra
+performance_schema=ON"	
+userstat=ON"	
+max_connections=10000"
+
+11. Có cấu hình audit log cho database. Ví dụ với trường hợp database MariaDB
+Sử dụng command sau:
+show plugins;
+show variables like "%server_audit_%";
+
+Kết quả mong muốn đầu ra
+plugin_load_add=server_audit
+server_audit_logging=ON
+server_audit_events=CONNECT,QUERY_DDL,QUERY_DCL
+server_audit_file_rotate_now=ON
+server_audit_file_rotate_size=100000000
+server_audit_file_rotations=99
+server_audit_output_type=file
+server_audit_query_log_limit=65000
+
+12. Không xuất hiện các câu lệnh SQL tồi, gây cao tải cho database trong slow log	
+cat /log/mysql/mysqld.slow.log
+Không có câu SQL lỗi
+
+13. Không tồn tại bảng bị phân mảnh trên DB	
+Sử dụng command sau:
+select ENGINE,
+  concat(TABLE_SCHEMA, '.', TABLE_NAME) as table_name,
+  round(DATA_LENGTH/1024/1024, 2) as data_length,
+  round(INDEX_LENGTH/1024/1024, 2) as index_length,
+  round(DATA_FREE/1024/1024, 2) as data_free,
+  (DATA_FREE/(INDEX_LENGTH+DATA_LENGTH)*100) as frag_ratio
+FROM information_schema.tables
+WHERE DATA_FREE/(INDEX_LENGTH+DATA_LENGTH)*100 > 50
+and TABLE_SCHEMA not in ('mysql','sysbench','information_schema','performance_schema','sys','vsystem')
+ORDER BY frag_ratio DESC;
+
+Kết quả mong muốn:
+Không có kết quả trả về
+
+14. Bảng lư trữ dữ liệu lịch sử, dữ liệu log lớn hơn 5G phải được chia partition	
+Sử dụng command sau:
+"SELECT 
+     table_schema as `Database`, 
+     table_name AS `Table`, 
+     round(((data_length + index_length) / 1024 / 1024), 2) `Size in MB` 
+FROM information_schema.TABLES
+WHERE (table_schema,table_name) not in (select distinct TABLE_SCHEMA,TABLE_NAME from INFORMATION_SCHEMA.PARTITIONS where PARTITION_METHOD is not null)
+and round(((data_length + index_length) / 1024 / 1024/1024), 2) >= 5
+ORDER BY (data_length + index_length) DESC;"
+
+Kết quả mong muốn
+Không có kết quả trả về
+
+15. Đối với mô hình Galera cluster, các bảng bắt buộc phải có primary key, đối với master slave thì bỏ kết quả check, setfact N/A	
+Sử dụng command sau:
+SELECT tables.table_schema, 
+       tables.table_name, 
+       tables.table_rows 
+FROM   information_schema.tables 
+       LEFT JOIN (SELECT table_schema, 
+                         table_name 
+                  FROM   information_schema.statistics 
+                  GROUP  BY table_schema, 
+                            table_name, 
+                            index_name 
+                  HAVING Sum(CASE 
+                               WHEN non_unique = 0 
+                                    AND nullable != 'YES' THEN 1 
+                               ELSE 0 
+                             end) = Count(*)) puks 
+              ON tables.table_schema = puks.table_schema 
+                 AND tables.table_name = puks.table_name 
+WHERE  puks.table_name IS NULL 
+       AND tables.table_schema NOT IN ( 'mysql', 'information_schema', 
+                                        'performance_schema' 
+                                        , 'sys' ) 
+       AND tables.table_type = 'BASE TABLE' 
+       AND engine = 'InnoDB'; "		
+
+Kết quả mong muốn
+Không có kết quả trả về
+
+16. Không chứa schema, table không có trong thiết kế hệ thống	
+Sử dụng command sau:
+select TABLE_SCHEMA,TABLE_NAME from information_schema.tables where (TABLE_SCHEMA,TABLE_NAME) not in (danh sách) and TABLE_SCHEMA not in ('information_schema','mysql','performance_schema','vsystem','sys');
+
+Kết quả mong muốn:	
+Không chứa schema, table không có trong thiết kế hệ thống. Không có kết quả trả về khi thực hiện truy vấn.
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+### Playbook 8: Kiểm tra cấu hình binlog
+
+```yaml
+---
+- name: Check binlog configuration
+  hosts: all
+  tasks:
+    - name: Get binlog variables
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        query: "show variables where variable_name like '%log_bin%';"
+      register: log_bin
+
+    - name: Get expire_logs_days
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        query: "show variables where variable_name like '%expire_logs_days%';"
+      register: expire_logs_days
+
+    - name: Get binlog_format
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        query: "show variables where variable_name like '%binlog_format%';"
+      register: binlog_format
+
+    - name: Get max_binlog_size
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        query: "show variables where variable_name like '%max_binlog_size%';"
+      register: max_binlog_size
+
+    - name: Set facts based on binlog configuration
+      set_fact:
+        binlog_config: >
+          log_bin={{ log_bin.result[0]['Value'] }},
+          expire_logs_days={{ expire_logs_days.result[0]['Value'] }},
+          binlog_format={{ binlog_format.result[0]['Value'] }},
+          max_binlog_size={{ max_binlog_size.result[0]['Value'] }}
+
+    - name: PASS if binlog configuration is correct
+      set_fact:
+        check_binlog: "PASS"
+      when:
+        - log_bin.result[0]['Value'] == 'ON'
+        - expire_logs_days.result[0]['Value'] == '7'
+        - binlog_format.result[0]['Value'] == 'ROW'
+        - max_binlog_size.result[0]['Value'] == '536870912'
+
+    - name: FAIL if binlog configuration is incorrect
+      set_fact:
+        check_binlog: "FAIL"
+      when:
+        - log_bin.result[0]['Value'] != 'ON' or
+          expire_logs_days.result[0]['Value'] != '7' or
+          binlog_format.result[0]['Value'] != 'ROW' or
+          max_binlog_size.result[0]['Value'] != '536870912'
+
+    - name: Output detailed results after the checking process is finished
+      debug:
+        msg: >
+          Binlog configuration: {{ binlog_config }}.
+          Status: {{ check_binlog }}
+```
+
+### Playbook 9: Kiểm tra cấu hình InnoDB và slow log
+
+```yaml
+---
+- name: Check InnoDB and slow log configuration
+  hosts: all
+  tasks:
+    - name: Get innodb_log_file_size
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        query: "show variables like '%innodb_log_file_size%';"
+      register: innodb_log_file_size
+
+    - name: Get lower_case_table_names
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        query: "show variables like '%lower_case_table_names%';"
+      register: lower_case_table_names
+
+    - name: Get innodb_file_per_table
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        query: "show variables like '%innodb_file_per_table%';"
+      register: innodb_file_per_table
+
+    - name: Get slow_query_log
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        query: "show variables like '%slow_query_log%';"
+      register: slow_query_log
+
+    - name: Set facts based on InnoDB and slow log configuration
+      set_fact:
+        innodb_config: >
+          innodb_log_file_size={{ innodb_log_file_size.result[0]['Value'] }},
+          lower_case_table_names={{ lower_case_table_names.result[0]['Value'] }},
+          innodb_file_per_table={{ innodb_file_per_table.result[0]['Value'] }},
+          slow_query_log={{ slow_query_log.result[0]['Value'] }}
+
+    - name: PASS if InnoDB and slow log configuration is correct
+      set_fact:
+        check_innodb: "PASS"
+      when:
+        - innodb_log_file_size.result[0]['Value'] == '268435456'
+        - lower_case_table_names.result[0]['Value'] == '1'
+        - innodb_file_per_table.result[0]['Value'] == 'ON'
+        - slow_query_log.result[0]['Value'] == 'ON'
+
+    - name: FAIL if InnoDB and slow log configuration is incorrect
+      set_fact:
+        check_innodb: "FAIL"
+      when:
+        - innodb_log_file_size.result[0]['Value'] != '268435456' or
+          lower_case_table_names.result[0]['Value'] != '1' or
+          innodb_file_per_table.result[0]['Value'] != 'ON' or
+          slow_query_log.result[0]['Value'] != 'ON'
+
+    - name: Output detailed results after the checking process is finished
+      debug:
+        msg: >
+          InnoDB and slow log configuration: {{ innodb_config }}.
+          Status: {{ check_innodb }}
+```
+
+### Playbook 10: Kiểm tra cấu hình Performance Schema và Max Connections
+
+```yaml
+---
+- name: Check Performance Schema and Max Connections
+  hosts: all
+  tasks:
+    - name: Get performance_schema
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        query: "show variables like '%performance_schema%';"
+      register: performance_schema
+
+    - name: Get userstat
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        query: "show variables like '%userstat%';"
+      register: userstat
+
+    - name: Get max_connections
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        query: "show variables like '%max_connections%';"
+      register: max_connections
+
+    - name: Set facts based on Performance Schema and Max Connections
+      set_fact:
+        performance_config: >
+          performance_schema={{ performance_schema.result[0]['Value'] }},
+          userstat={{ userstat.result[0]['Value'] }},
+          max_connections={{ max_connections.result[0]['Value'] }}
+
+    - name: PASS if Performance Schema and Max Connections are correct
+      set_fact:
+        check_performance: "PASS"
+      when:
+        - performance_schema.result[0]['Value'] == 'ON'
+        - userstat.result[0]['Value'] == 'ON'
+        - max_connections.result[0]['Value'] >= '5000' and max_connections.result[0]['Value'] <= '10000'
+
+    - name: FAIL if Performance Schema and Max Connections are incorrect
+      set_fact:
+        check_performance: "FAIL"
+      when:
+        - performance_schema.result[0]['Value'] != 'ON' or
+          userstat.result[0]['Value'] != 'ON' or
+          max_connections.result[0]['Value'] < '5000' or max_connections.result[0]['Value'] > '10000'
+
+    - name: Output detailed results after the checking process is finished
+      debug:
+        msg: >
+          Performance Schema and Max Connections: {{ performance_config }}.
+          Status: {{ check_performance }}
+```
+
+### Playbook 11: Kiểm tra cấu hình Audit Log
+
+```yaml
+---
+- name: Check Audit Log configuration
+  hosts: all
+  tasks:
+    - name: Get server_audit variables
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        query: "show variables like '%server_audit_%';"
+      register: server_audit
+
+    - name: Set facts based on Audit Log configuration
+      set_fact:
+        audit_config: >
+          server_audit_logging={{ server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_logging') | map(attribute='Value') | first }},
+          server_audit_events={{ server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_events') | map(attribute='Value') | first }},
+          server_audit_file_rotate_size={{ server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_file_rotate_size') | map(attribute='Value') | first }},
+          server_audit_file_rotations={{ server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_file_rotations') | map(attribute='Value') | first }},
+          server_audit_output_type={{ server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_output_type') | map(attribute='Value') | first }},
+          server_audit_query_log_limit={{ server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_query_log_limit') | map(attribute='Value') | first }}
+
+    - name: PASS if Audit Log configuration is correct
+      set_fact:
+        check_audit: "PASS"
+      when:
+        - server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_logging') | map(attribute='Value') | first == 'ON'
+        - server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_events') | map(attribute='Value') | first == 'CONNECT,QUERY_DDL,QUERY_DCL'
+        - server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_file_rotate_size') | map(attribute='Value') | first == '100000000'
+        - server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_file_rotations') | map(attribute='Value') | first == '99'
+        - server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_output_type') | map(attribute='Value') | first == 'file'
+        - server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_query_log_limit') | map(attribute='Value') | first == '65000'
+
+    - name: FAIL if Audit Log configuration is incorrect
+      set_fact:
+        check_audit: "FAIL"
+      when:
+        - server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_logging') | map(attribute='Value') | first != 'ON' or
+          server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_events') | map(attribute='Value') | first != 'CONNECT,QUERY_DDL,QUERY_DCL' or
+          server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_file_rotate_size') | map(attribute='Value') | first != '100000000' or
+          server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_file_rotations') | map(attribute='Value') | first != '99' or
+          server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_output_type') | map(attribute='Value') | first != 'file' or
+          server_audit.result | selectattr('Variable_name', 'eq', 'server_audit_query_log_limit') | map(attribute='Value') | first != '65000'
+
+    - name: Output detailed results after the checking process is finished
+      debug:
+        msg: >
+          Audit Log configuration: {{ audit_config }}.
+          Status: {{ check_audit }}
+```
+
+### Playbook 12: Kiểm tra slow log không chứa câu lệnh SQL tồi
+
+```yaml
+---
+- name: Check slow log for bad SQL queries
+  hosts: all
+  tasks:
+    - name: Read slow log file
+      shell: cat /log/mysql/mysqld.slow.log
+      register: slow_log
+
+    - name: Set fact if no bad SQL queries found
+      set_fact:
+        check_slow_log: "PASS"
+      when: "'ERROR' not in slow_log.stdout"
+
+    - name: Set fact if bad SQL queries found
+      set_fact:
+        check_slow_log: "FAIL"
+      when: "'ERROR' in slow_log.stdout"
+
+    - name: Output detailed results after the checking process is finished
+      debug:
+        msg: >
+          Slow log status: {{ check_slow_log }}.
+          No bad SQL queries found.
+```
+
+### Playbook 13: Kiểm tra bảng không bị phân mảnh
+
+```yaml
+---
+- name: Check for fragmented tables
+  hosts: all
+  tasks:
+    - name: Get fragmented tables
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        query: >
+          SELECT ENGINE,
+            concat(TABLE_SCHEMA, '.', TABLE_NAME) as table_name,
+            round(DATA_LENGTH/1024/1024, 2) as data_length,
+            round(INDEX_LENGTH/1024/1024, 2) as index_length,
+            round(DATA_FREE/1024/1024, 2) as data_free,
+            (DATA_FREE/(INDEX_LENGTH+DATA_LENGTH)*100) as frag_ratio
+          FROM information_schema.tables
+          WHERE DATA_FREE/(INDEX_LENGTH+DATA_LENGTH)*100 > 50
+          and TABLE_SCHEMA not in ('mysql','sysbench','information_schema','performance_schema','sys','vsystem')
+          ORDER BY frag_ratio DESC;
+      register: fragmented_tables
+
+    - name: Set fact if no fragmented tables found
+      set_fact:
+        check_fragmentation: "PASS"
+      when: fragmented_tables.result | length == 0
+
+    - name: Set fact if fragmented tables found
+      set_fact:
+        check_fragmentation: "FAIL"
+      when: fragmented_tables.result | length > 0
+
+    - name: Output detailed results after the checking process is finished
+      debug:
+        msg: >
+          Fragmentation status: {{ check_fragmentation }}.
+          No fragmented tables found.
+```
+
+### Playbook 14: Kiểm tra bảng lớn hơn 5G có được chia partition
+
+```yaml
+---
+- name: Check for large tables without partitions
+  hosts: all
+  tasks:
+    - name: Get large tables without partitions
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        query: >
+          SELECT 
+              table_schema as `Database`, 
+              table_name AS `Table`, 
+              round(((data_length + index_length) / 1024 / 1024), 2) `Size in MB` 
+          FROM information_schema.TABLES
+          WHERE (table_schema,table_name) not in (select distinct TABLE_SCHEMA,TABLE_NAME from INFORMATION_SCHEMA.PARTITIONS where PARTITION_METHOD is not null)
+          and round(((data_length + index_length) / 1024 / 1024/1024), 2) >= 5
+          ORDER BY (data_length + index_length) DESC;
+      register: large_tables
+
+    - name: Set fact if no large tables without partitions found
+      set_fact:
+        check_large_tables: "PASS"
+      when: large_tables.result | length == 0
+
+    - name: Set fact if large tables without partitions found
+      set_fact:
+        check_large_tables: "FAIL"
+      when: large_tables.result | length > 0
+
+    - name: Output detailed results after the checking process is finished
+      debug:
+        msg: >
+          Large tables status: {{ check_large_tables }}.
+          No large tables without partitions found.
+```
+
+### Playbook 15: Kiểm tra bảng trong Galera Cluster có Primary Key
+
+```yaml
+---
+- name: Check for tables without primary key in Galera Cluster
+  hosts: all
+  tasks:
+    - name: Get tables without primary key
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        query: >
+          SELECT tables.table_schema, 
+                 tables.table_name, 
+                 tables.table_rows 
+          FROM   information_schema.tables 
+                 LEFT JOIN (SELECT table_schema, 
+                                   table_name 
+                            FROM   information_schema.statistics 
+                            GROUP  BY table_schema, 
+                                      table_name, 
+                                      index_name 
+                            HAVING Sum(CASE 
+                                         WHEN non_unique = 0 
+                                              AND nullable != 'YES' THEN 1 
+                                         ELSE 0 
+                                       end) = Count(*)) puks 
+                        ON tables.table_schema = puks.table_schema 
+                           AND tables.table_name = puks.table_name 
+          WHERE  puks.table_name IS NULL 
+                 AND tables.table_schema NOT IN ( 'mysql', 'information_schema', 
+                                                  'performance_schema' 
+                                                  , 'sys' ) 
+                 AND tables.table_type = 'BASE TABLE' 
+                 AND engine = 'InnoDB';
+      register: tables_without_pk
+
+    - name: Set fact if no tables without primary key found
+      set_fact:
+        check_primary_key: "PASS"
+      when: tables_without_pk.result | length == 0
+
+    - name: Set fact if tables without primary key found
+      set_fact:
+        check_primary_key: "FAIL"
+      when: tables_without_pk.result | length > 0
+
+    - name: Output detailed results after the checking process is finished
+      debug:
+        msg: >
+          Primary key status: {{ check_primary_key }}.
+          No tables without primary key found.
+```
+
+### Playbook 16: Kiểm tra schema và table không có trong thiết kế hệ thống
+
+```yaml
+---
+- name: Check for unauthorized schemas and tables
+  hosts: all
+  tasks:
+    - name: Get unauthorized schemas and tables
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        query: >
+          select TABLE_SCHEMA,TABLE_NAME 
+          from information_schema.tables 
+          where (TABLE_SCHEMA,TABLE_NAME) not in (danh sách) 
+          and TABLE_SCHEMA not in ('information_schema','mysql','performance_schema','vsystem','sys');
+      register: unauthorized_tables
+
+    - name: Set fact if no unauthorized schemas and tables found
+      set_fact:
+        check_unauthorized: "PASS"
+      when: unauthorized_tables.result | length == 0
+
+    - name: Set fact if unauthorized schemas and tables found
+      set_fact:
+        check_unauthorized: "FAIL"
+      when: unauthorized_tables.result | length > 0
+
+    - name: Output detailed results after the checking process is finished
+      debug:
+        msg: >
+          Unauthorized schemas and tables status: {{ check_unauthorized }}.
+          No unauthorized schemas and tables found.

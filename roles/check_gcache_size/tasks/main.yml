@@ -1,0 +1,76 @@
+---
+# 5. Gcache Size
+- name: Determine database replication model
+  block:
+    - name: Check Galera status
+      ansible.builtin.command: >
+        mysql -uroot -p{{ mysql_root_password }} -e "SHOW VARIABLES LIKE 'wsrep_on';"
+      register: galera_check
+      changed_when: false
+      ignore_errors: true
+
+    - name: Set topology facts based on check results
+      ansible.builtin.set_fact:
+        is_galera: "{{ galera_check is succeeded and 'ON' in galera_check.stdout }}"
+        is_replication: "{{ galera_check is succeeded and 'OFF' in galera_check.stdout }}"
+        replication_model: "{{ 'Galera' if (galera_check is succeeded and 'ON' in galera_check.stdout) else 'Master-Slave' }}"
+
+    - name: Show replication model information
+      ansible.builtin.debug:
+        msg: "Detected replication model: {{ replication_model }}"
+
+- name: Handle Galera cluster checks
+  block:
+    - name: Get wsrep provider options
+      ansible.builtin.command: >
+        mysql -uroot -p{{ mysql_root_password }} -e "SHOW VARIABLES LIKE 'wsrep_provider_options';"
+      register: gcache_check
+      changed_when: false
+      ignore_errors: true
+
+    - name: Extract wsrep_provider_options value
+      ansible.builtin.set_fact:
+        wsrep_options: "{{ gcache_check.stdout_lines[1].split('\t')[1] if gcache_check is succeeded and gcache_check.stdout_lines|length > 1 else '' }}"
+
+    - name: Validate gcache size
+      ansible.builtin.assert:
+        that: "'gcache.size=5120M' in wsrep_options"
+        msg: "Gcache size not properly configured (current: {{ wsrep_options }})"
+
+    - name: Set facts based on gcache size validation
+      block:
+        - name: PASS if gcache size is properly configured
+          ansible.builtin.set_fact:
+            check_gcache_size: "PASS"
+          when: "'gcache.size=5120M' in wsrep_options"
+
+        - name: FAIL if gcache size is not properly configured
+          ansible.builtin.set_fact:
+            check_gcache_size: "FAIL"
+          when: "'gcache.size=5120M' not in wsrep_options"
+
+    - name: Output detailed results for Galera
+      ansible.builtin.debug:
+        msg: >
+          Gcache Size Check: {{ check_gcache_size | default('N/A') }}
+          wsrep_provider_options: {{ wsrep_options | default('N/A') }}
+  when: is_galera
+
+- name: Handle non-Galera (Master-Slave or Standalone) cases
+  block:
+    - name: Set default values for non-Galera environments
+      ansible.builtin.set_fact:
+        check_gcache_size: "N/A (Not a Galera cluster)"
+        wsrep_options: "N/A (Not a Galera cluster)"
+
+    - name: Show message for non-Galera environments
+      ansible.builtin.debug:
+        msg: "Skipping Galera checks as this is a {{ replication_model }} environment"
+  when: not is_galera
+
+- name: Final summary of gcache check
+  ansible.builtin.debug:
+    msg: 
+      - "Replication Model: {{ replication_model }}"
+      - "Gcache Check Result: {{ check_gcache_size }}"
+      - "{% if is_galera %}wsrep_provider_options: {{ wsrep_options }}{% endif %}"

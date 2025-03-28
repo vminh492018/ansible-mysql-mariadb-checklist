@@ -1,0 +1,84 @@
+---
+- name: Get MySQL configuration variables
+  block:
+    - name: Get innodb_log_file_size using mysql command
+      command: >
+        mysql -uroot -p{{ mysql_root_password }} -e "show variables like '%innodb_log_file_size%';"
+      register: innodb_log_file_size
+      no_log: true  # Ẩn password trong log
+
+    - name: Get lower_case_table_names using mysql command
+      command: >
+        mysql -uroot -p{{ mysql_root_password }} -e "show variables like '%lower_case_table_names%';"
+      register: lower_case_table_names
+      no_log: true
+
+    - name: Get innodb_file_per_table using mysql command
+      command: >
+        mysql -uroot -p{{ mysql_root_password }} -e "show variables like '%innodb_file_per_table%';"
+      register: innodb_file_per_table
+      no_log: true
+
+    - name: Get slow_query_log using mysql command
+      command: >
+        mysql -uroot -p{{ mysql_root_password }} -e "show variables like '%slow_query_log%';"
+      register: slow_query_log
+      no_log: true
+
+    - name: Get slow_query_log_file using mysql command
+      command: >
+        mysql -uroot -p{{ mysql_root_password }} -e "show variables like '%slow_query_log_file%';"
+      register: slow_query_log_file
+      no_log: true
+
+  rescue:
+    - name: Handle MySQL connection error
+      fail:
+        msg: "Failed to connect to MySQL database"
+      when: false  # Disable this if you want to continue even if some commands fail
+
+- name: Parse MySQL output
+  set_fact:
+    parsed_innodb_log_size: "{{ (innodb_log_file_size.stdout_lines[1] | regex_replace('\\s+', ' ')).split(' ')[1] }}"
+    parsed_lower_case: "{{ (lower_case_table_names.stdout_lines[1] | regex_replace('\\s+', ' ')).split(' ')[1] }}"
+    parsed_file_per_table: "{{ (innodb_file_per_table.stdout_lines[1] | regex_replace('\\s+', ' ')).split(' ')[1] }}"
+    parsed_slow_log: "{{ (slow_query_log.stdout_lines[1] | regex_replace('\\s+', ' ')).split(' ')[1] }}"
+    parsed_slow_log_file: "{{ (slow_query_log_file.stdout_lines[1] | regex_replace('\\s+', ' ')).split(' ')[1] }}"
+
+- name: Set facts based on InnoDB and slow log configuration
+  set_fact:
+    innodb_config: 
+      - "innodb_log_file_size={{ parsed_innodb_log_size }}"
+      - "lower_case_table_names={{ parsed_lower_case }}"
+      - "innodb_file_per_table={{ parsed_file_per_table }}"      
+      - "slow_query_log={{ parsed_slow_log }}"
+      - "slow_query_log_file={{ parsed_slow_log_file }}"
+
+- name: PASS if InnoDB and slow log configuration is correct
+  set_fact:
+    check_innodb: "PASS"
+  when:
+    - parsed_innodb_log_size == '268435456' or parsed_innodb_log_size == '256M'
+    - parsed_lower_case == '1'
+    - parsed_file_per_table == 'ON'
+    - parsed_slow_log == 'ON'
+
+- name: FAIL if InnoDB and slow log configuration is incorrect
+  set_fact:
+    check_innodb: "FAIL"
+  when:
+    - not (parsed_innodb_log_size == '268435456' or parsed_innodb_log_size == '256M') or
+      parsed_lower_case != '1' or
+      parsed_file_per_table != 'ON' or
+      parsed_slow_log != 'ON'
+
+- name: Output detailed results after the checking process is finished
+  debug:
+    msg: 
+      - "InnoDB and slow log configuration:"
+      - "{{ innodb_config[0] }}(expected: 256M)"
+      - "{{ innodb_config[1] }}(expected: 1)"
+      - "{{ innodb_config[2] }}(expected: ON)"
+      - "{{ innodb_config[3] }}(expected: 1)"
+      - "{{ innodb_config[4] }}(expected: /log/mysql/mysqld.slow.log)"
+      - "Status: {{ check_innodb }}"

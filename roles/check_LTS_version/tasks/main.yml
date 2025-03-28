@@ -1,0 +1,33 @@
+---
+# 1. Check LTS MySQL/MariaDB Version using cmd
+- name: Get databases version via cmd
+  ansible.builtin.command:
+    cmd: "mysql -uroot -p{{ mysql_root_password }} -e 'SELECT version();'"
+  register: version_DB
+
+- name: Optimize the results with special characters...
+  ansible.builtin.set_fact:
+    cleaned_version: "{{ version_DB.stdout | regex_replace('\\n', '') }}"
+
+- name: Optimize the version string...
+  ansible.builtin.set_fact:
+    major_minor: "{{ cleaned_version | regex_search('([0-9]+\\.[0-9]+)') }}"
+
+- name: Set facts after checking version
+  block:
+    - name: PASS if version database within supported_versions
+      ansible.builtin.set_fact:
+        check_LTS_version: "PASS"
+      when: major_minor in supported_versions
+
+    - name: FAIL if version database without supported_versions
+      ansible.builtin.set_fact:
+        check_LTS_version: "FAIL"
+      when: major_minor not in supported_versions
+
+- name: Detailed results are output after the checking process is finished....
+  ansible.builtin.debug:
+    msg:
+      - "Database Version: {{ cleaned_version }}"
+      - "Major.Minor Version: {{ major_minor }}"
+      - "LTS Version Check: {{ check_LTS_version }}"

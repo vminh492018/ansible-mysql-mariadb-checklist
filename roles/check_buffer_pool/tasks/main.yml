@@ -1,0 +1,35 @@
+---
+- name: Get buffer pool size using mysql command
+  shell: |
+    mysql -uroot -p{{ mysql_root_password }} -e "SELECT @@innodb_buffer_pool_size/1024/1024/1024;" | grep -v '@@'
+  register: buffer_pool_raw
+  changed_when: false
+
+- name: Extract buffer pool size in bytes
+  set_fact:
+    buffer_pool_bytes: "{{ (buffer_pool_raw.stdout | float * 1024 * 1024 * 1024) | int }}"
+
+- name: Calculate buffer pool size percentage
+  set_fact:
+    buffer_percent: "{{ (buffer_pool_bytes | float / (ansible_memtotal_mb * 1024 * 1024) * 100) | round(2) }}"
+
+- name: Set facts based on buffer pool size
+  block:
+    - name: PASS if buffer pool size is within the 65-70% range of server's memory
+      set_fact:
+        check_buffer_pool: "PASS"
+      when:
+        - buffer_percent | float >= 65
+        - buffer_percent | float <= 70
+
+    - name: FAIL if buffer pool size is outside the 65-70% range
+      set_fact:
+        check_buffer_pool: "FAIL - Buffer pool size is {{ buffer_pool_bytes | float / 1024 / 1024 / 1024 | round(2) }} GB ({{ buffer_percent }}% of {{ ansible_memtotal_mb | float / 1024 | round(2) }} GB total memory)"
+      when:
+        - buffer_percent | float < 65 or buffer_percent | float > 70
+        
+- name: Output detailed results after the checking process is finished
+  debug:
+    msg: 
+      - "Buffer pool size is {{ buffer_pool_bytes | float / 1024 / 1024 / 1024 | round(2) }} GB ({{ buffer_percent }}% of {{ ansible_memtotal_mb | float / 1024 | round(2) }} GB total memory)"
+      - "Status: {{ check_buffer_pool }}"

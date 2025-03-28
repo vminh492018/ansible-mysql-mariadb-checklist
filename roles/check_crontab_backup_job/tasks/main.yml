@@ -1,0 +1,30 @@
+---
+# 3. Backup Check
+- name: Check backup tools in crontab
+  ansible.builtin.shell: "crontab -l | grep -E 'mariabackup|xtrabackup|mysqlbackup'"
+  register: backup_check
+  ignore_errors: true
+  changed_when: false
+  failed_when: false
+
+- name: Set facts based on backup check
+  block:
+    - name: PASS if backup job is found in crontab
+      ansible.builtin.set_fact:
+        check_crontab_backup_job: "PASS"
+      when: >
+        backup_check.rc == 0 and
+        ('.daily' in backup_check.stdout or '0 0 * * *' in backup_check.stdout)
+
+    - name: FAIL if backup job is not found in crontab
+      ansible.builtin.set_fact:
+        check_crontab_backup_job: "FAIL"
+      when: >
+        backup_check.rc != 0 or
+        ('.daily' not in backup_check.stdout and '0 0 * * *' not in backup_check.stdout)
+
+- name: Output detailed results after the checking process is finished
+  ansible.builtin.debug:
+    msg:
+      - "Backup job status: {{ check_crontab_backup_job }}"
+      - "Crontab output: {{ backup_check.stdout if check_crontab_backup_job == 'PASS' else 'Backup job is not found in crontab' }}"

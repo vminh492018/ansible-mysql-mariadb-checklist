@@ -1,0 +1,19 @@
+---
+- name: Read slow log file
+  shell: cat /logs/mysql/mysqld.slow.log
+  register: slow_log
+
+- name: Set fact if no bad SQL queries found
+  set_fact:
+    check_slowlog_for_bad_SQLqueries: "PASS"
+  when: "'ERROR' not in slow_log.stdout"
+
+- name: Set fact if bad SQL queries found
+  set_fact:
+    check_slowlog_for_bad_SQLqueries: "FAIL"
+  when: "'ERROR' in slow_log.stdout"
+
+- name: Output detailed results after the checking process is finished
+  debug:
+    msg:
+      - "Status SQL queries found: {{ check_slowlog_for_bad_SQLqueries }}"

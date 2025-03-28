@@ -1,0 +1,46 @@
+- name: Check performance_schema configuration
+  shell: mysql -uroot -p{{ mysql_root_password }} -e "show variables like '%performance_schema%';" | awk 'NR==2 {print $2}'
+  register: performance_schema
+  changed_when: false
+
+- name: Check userstat configuration
+  shell: mysql -uroot -p{{ mysql_root_password }} -e "show variables like '%userstat%';" | awk 'NR==2 {print $2}'
+  register: userstat
+  changed_when: false
+
+- name: Check max_connections configuration
+  shell: mysql -uroot -p{{ mysql_root_password }} -e "show variables like 'max_connections%';" | awk 'NR==2 {print $2}'
+  register: max_connections
+  changed_when: false
+
+- name: Set facts based on Performance Schema and Max Connections
+  set_fact:
+    performance_config:
+      - "performance_schema={{ performance_schema.stdout }}"
+      - "userstat={{ userstat.stdout }}"
+      - "max_connections={{ max_connections.stdout }}"
+
+- name: PASS if Performance Schema and Max Connections are correct
+  set_fact:
+    check_performance_schema_max_connections: "PASS"
+  when:
+    - performance_schema.stdout == 'ON'
+    - userstat.stdout == 'ON'
+    - max_connections.stdout|int >= 5000 and max_connections.stdout|int <= 10000
+
+- name: FAIL if Performance Schema and Max Connections are incorrect
+  set_fact:
+    check_performance_schema_max_connections: "FAIL"
+  when:
+    - performance_schema.stdout != 'ON' or
+      userstat.stdout != 'ON' or
+      max_connections.stdout|int < 5000 or max_connections.stdout|int > 10000
+
+- name: Output detailed results after the checking process is finished
+  debug:
+    msg:
+      - "Performance Schema and Max Connections:"
+      - "{{ performance_config[0] }}(expected: ON)"
+      - "{{ performance_config[1] }}(expected: ON)"
+      - "{{ performance_config[2] }}(expected: 10000)"
+      - "Status: {{ check_performance_schema_max_connections }}"

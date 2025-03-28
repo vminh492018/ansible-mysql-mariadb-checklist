@@ -1,0 +1,52 @@
+---
+- name: Check for non-partitioned tables larger than 5GB
+  command: >
+    mysql -uroot -p{{ mysql_root_password }} -NBe
+    "SELECT 
+         table_schema as `Database`, 
+         table_name AS `Table`, 
+         round(((data_length + index_length) / 1024 / 1024), 2) `Size in MB` 
+    FROM information_schema.TABLES
+    WHERE (table_schema,table_name) not in (select distinct TABLE_SCHEMA,TABLE_NAME from INFORMATION_SCHEMA.PARTITIONS where PARTITION_METHOD is not null)
+    and round(((data_length + index_length) / 1024 / 1024/1024), 2) >= 5
+    ORDER BY (data_length + index_length) DESC;"
+  register: large_non_partitioned_tables
+  changed_when: false
+  no_log: true
+
+- name: Parse query results into list of dictionaries
+  set_fact:
+    problematic_tables: |
+      {% set raw_results = large_non_partitioned_tables.stdout_lines %}
+      {% set result = [] %}
+      {% for line in raw_results %}
+        {% set parts = line.split('\t') %}
+        {% if parts|length == 3 %}
+          {% set table_info = {
+            'database': parts[0],
+            'table': parts[1],
+            'size_mb': parts[2]|float
+          } %}
+          {% set _ = result.append(table_info) %}
+        {% endif %}
+      {% endfor %}
+      {{ result }}
+
+- name: Set check result based on query output
+  set_fact:
+    check_large_tables_without_partitions: "{{ 'PASS' if problematic_tables|length == 0 else 'FAIL' }}"
+
+- name: Fail if there are non-partitioned tables larger than 5GB
+  fail:
+    msg: "Found {{ problematic_tables|length }} non-partitioned table(s) larger than 5GB that need partitioning"
+  when: problematic_tables|length > 0
+
+- name: Show partition check results
+  debug:
+    msg:
+      - "Partition configuration check: {{ check_large_tables_without_partitions }}"
+      - "Non-partitioned tables larger than 5GB:"
+      - "{{ problematic_tables }}"
+      - "Expected result: No tables should be returned by the query"
+  when: problematic_tables is defined
+

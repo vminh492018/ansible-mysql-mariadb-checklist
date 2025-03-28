@@ -1,0 +1,48 @@
+---
+- name: Check OS information
+  hosts: Home
+  become: true
+  vars:
+    mysql_root_password: "vhkt@#2024"
+    supported_versions: ['10.11', '11.4', '10.6']
+    csv_path: /ansible/reports
+    csv_filename: "report_{{ ansible_date_time.date }}_{{ ansible_date_time.hour }}{{ ansible_date_time.minute }}.csv" #report.csv 
+    headers: inventory_hostname,check_LTS_version,check_partitions,check_crontab_backup_job,check_replication_status,check_gcache_size,check_storage_engine,check_buffer_pool,check_binlog_conf,check_innodb,check_performance_schema_max_connections,check_audit_log_configuration,check_slowlog_for_bad_SQLqueries,check_for_fragmented_tables,check_large_tables_without_partitions,check_for_tables_without_primary
+  tasks:
+  - name: Execute all roles and save the results to CSV file....
+    include_role:
+      name: "{{ item }}"
+    loop:
+      - check_LTS_version
+      - check_partitions
+      - check_crontab_backup_job
+      - check_replication_status
+      - check_gcache_size
+      - check_storage_engine
+      - check_buffer_pool
+      - check_binlog_conf
+      - check_innodb
+      - check_performance_schema_max_connections
+      - check_audit_log_configuration
+      - check_slowlog_for_bad_SQLqueries
+      - check_for_fragmented_tables
+      - check_large_tables_without_partitions
+      - check_for_tables_without_primary
+
+  - name: Create CSV headers
+    ansible.builtin.lineinfile:
+      dest: "{{ csv_path }}/{{ csv_filename }}"
+      line: "{{ headers }}"
+      create: true
+      state: present
+    delegate_to: localhost
+    run_once: true
+
+
+  - name: Build out CSV file
+    ansible.builtin.lineinfile:
+      dest: "{{ csv_path }}/{{ csv_filename }}"
+      line: "{{ inventory_hostname }},{{ check_LTS_version }},{{ check_partitions }},{{ check_crontab_backup_job }},{{ check_replication_status }},{{ check_gcache_size }}, {{ check_storage_engine }},{{ check_buffer_pool }},{{ check_binlog_conf }},{{ check_innodb }},{{ check_performance_schema_max_connections }},{{ check_audit_log_configuration }},{{ check_slowlog_for_bad_SQLqueries }}, {{ check_for_fragmented_tables }},{{ check_large_tables_without_partitions }}, {{ check_for_tables_without_primary }}"
+      create: true
+      state: present
+    delegate_to: localhost

@@ -1,0 +1,76 @@
+---
+- name: Determine database replication model
+  block:
+    - name: Check Galera status
+      ansible.builtin.command: >
+        mysql -uroot -p{{ mysql_root_password }} -e "SHOW VARIABLES LIKE 'wsrep_on';"
+      register: galera_check
+      changed_when: false
+      ignore_errors: true
+
+    - name: Set topology facts
+      ansible.builtin.set_fact:
+        is_galera: "{{ galera_check is succeeded and 'ON' in galera_check.stdout }}"
+        is_replication: "{{ galera_check is succeeded and 'OFF' in galera_check.stdout }}"
+
+- name: Check replication status based on model
+  block:
+    - name: Check Galera cluster status
+      block:
+        - name: Get Galera status
+          ansible.builtin.command: >
+            mysql -uroot -p{{ mysql_root_password }} -e "SHOW STATUS LIKE 'wsrep_ready';"
+          register: galera_status
+          changed_when: false
+
+        - name: Parse and validate Galera status
+          ansible.builtin.set_fact:
+            galera_ready: "{{ galera_status.stdout_lines[1].split()[1] }}"
+            check_replication_status: "{{ 'PASS' if galera_status.stdout_lines[1].split()[1] == 'ON' else 'FAIL' }}"
+      when: is_galera|default(false)
+
+    - name: Check Master-Slave replication status
+      block:
+        - name: Check replication role and status
+          block:
+            - name: Check slave status
+              ansible.builtin.command: >
+                mysql -uroot -p{{ mysql_root_password }} -e "SHOW SLAVE STATUS\G"
+              register: slave_status
+              changed_when: false
+              ignore_errors: true
+
+            - name: Extract slave running status
+              ansible.builtin.set_fact:
+                is_slave: "{{ slave_status is succeeded and slave_status.stdout_lines|length > 0 }}"
+                slave_io_running: "{{ 'Yes' if 'Slave_IO_Running: Yes' in slave_status.stdout else 'No' }}"
+                slave_sql_running: "{{ 'Yes' if 'Slave_SQL_Running: Yes' in slave_status.stdout else 'No' }}"
+                check_replication_status: "{{ 'PASS' if 'Slave_IO_Running: Yes' in slave_status.stdout and 'Slave_SQL_Running: Yes' in slave_status.stdout else 'FAIL' }}"
+
+        - name: Check master status if not slave
+          block:
+            - name: Get connected slaves count
+              ansible.builtin.command: >
+                mysql -uroot -p{{ mysql_root_password }} -e "SHOW SLAVE HOSTS;"
+              register: slave_hosts
+              changed_when: false
+              ignore_errors: true
+
+            - name: Set master status
+              ansible.builtin.set_fact:
+                is_master: true
+                connected_slaves: "{{ slave_hosts.stdout_lines|length - 1 if slave_hosts is succeeded else 0 }}"
+                check_replication_status: "{{ 'PASS' if (slave_hosts.stdout_lines|length - 1) > 0 else 'FAIL' }}"
+          when: not is_slave|default(false)
+      when: is_replication|default(false)
+
+- name: Display replication status summary
+  ansible.builtin.debug:
+    msg: 
+      - "Database model: {{ 'Galera Cluster' if is_galera|default(false) else 'Master-Slave' if is_replication|default(false) else 'Standalone' }}"
+      - "Status: {{ check_replication_status|default('UNKNOWN') }}"
+      - "{% if is_replication|default(false) %}Role: {{ 'Slave' if is_slave|default(false) else 'Master' }}{% endif %}"
+      - "{% if is_slave|default(false) %}Slave IO Running: {{ slave_io_running|default('UNKNOWN') }}{% endif %}"
+      - "{% if is_slave|default(false) %}Slave SQL Running: {{ slave_sql_running|default('UNKNOWN') }}{% endif %}"
+      - "{% if is_master|default(false) %}Connected Slaves: {{ connected_slaves|default(0) }}{% endif %}"
+      - "{% if is_galera|default(false) %}Galera wsrep_ready: {{ galera_ready|default('UNKNOWN') }}{% endif %}"

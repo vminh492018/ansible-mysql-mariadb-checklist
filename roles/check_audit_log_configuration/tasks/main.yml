@@ -1,0 +1,76 @@
+---
+- name: Check MariaDB audit plugin status
+  command: mysql -uroot -p{{ mysql_root_password }} -NBe "show plugins;"
+  register: mysql_plugins
+  changed_when: false
+  no_log: true
+
+- name: Check MariaDB audit-related variables
+  command: mysql -uroot -p{{ mysql_root_password }} -NBe "show variables like '%server_audit_%';"
+  register: audit_vars
+  changed_when: false
+  no_log: true
+
+- name: Check additional MariaDB variables
+  command: mysql -uroot -p{{ mysql_root_password }} -NBe "show variables where variable_name in ('performance_schema', 'userstat', 'max_connections');"
+  register: misc_vars
+  changed_when: false
+  no_log: true
+
+- name: Parse audit plugin status
+  set_fact:
+    audit_plugin_loaded: "{{ 'server_audit' in mysql_plugins.stdout }}"
+
+- name: Parse audit variables into dictionary
+  set_fact:
+    current_audit_vars: "{{ current_audit_vars | default({}) | combine({item1.split('\t')[0]: item1.split('\t')[1]}) }}"
+  loop: "{{ audit_vars.stdout_lines }}"
+  loop_control:
+    loop_var: item1
+
+- name: Parse misc variables into dictionary
+  set_fact:
+    current_misc_vars: "{{ current_misc_vars | default({}) | combine({item2.split('\t')[0]: item2.split('\t')[1]}) }}"
+  loop: "{{ misc_vars.stdout_lines }}"
+  loop_control:
+    loop_var: item2
+
+- name: Set facts after checking audit configuration
+  block:
+    - name: PASS if all audit values match
+      set_fact:
+        check_audit_log_configuration: "PASS"
+      when:
+        - audit_plugin_loaded
+        - current_audit_vars.server_audit_logging == "ON"
+        - current_audit_vars.server_audit_events == "CONNECT,QUERY_DDL,QUERY_DCL"
+        - current_audit_vars.server_audit_file_rotate_now == "ON"
+        - current_audit_vars.server_audit_file_rotate_size == "100000000"
+        - current_audit_vars.server_audit_file_rotations == "99"
+        - current_audit_vars.server_audit_output_type == "file"
+        - current_audit_vars.server_audit_query_log_limit == "65000"
+        - current_misc_vars.performance_schema == "ON"
+        - current_misc_vars.userstat == "ON"
+        - current_misc_vars.max_connections == "10000"
+
+    - name: FAIL if any value doesn't match
+      set_fact:
+        check_audit_log_configuration: "FAIL"
+      when: check_audit_log_configuration is not defined 
+
+- name: Detailed results for audit configuration
+  debug:
+    msg:
+      - "----- Audit configuration check: {{ check_audit_log_configuration }} -----"
+      - "Audit plugin loaded: {{ audit_plugin_loaded }} (expected: True)"
+      - "Current audit values:"
+      - "server_audit_logging: {{ current_audit_vars.server_audit_logging | default('NOT SET') }} (expected: ON)"
+      - "server_audit_events: {{ current_audit_vars.server_audit_events | default('NOT SET') }} (expected: CONNECT,QUERY_DDL,QUERY_DCL)"
+      - "server_audit_file_rotate_now: {{ current_audit_vars.server_audit_file_rotate_now | default('NOT SET') }} (expected: ON)"
+      - "server_audit_file_rotate_size: {{ current_audit_vars.server_audit_file_rotate_size | default('NOT SET') }} (expected: 100000000)"
+      - "server_audit_file_rotations: {{ current_audit_vars.server_audit_file_rotations | default('NOT SET') }} (expected: 99)"
+      - "server_audit_output_type: {{ current_audit_vars.server_audit_output_type | default('NOT SET') }} (expected: file)"
+      - "server_audit_query_log_limit: {{ current_audit_vars.server_audit_query_log_limit | default('NOT SET') }} (expected: 65000)"
+      - "performance_schema: {{ current_misc_vars.performance_schema | default('NOT SET') }} (expected: ON)"
+      - "userstat: {{ current_misc_vars.userstat | default('NOT SET') }} (expected: ON)"
+      - "max_connections: {{ current_misc_vars.max_connections | default('NOT SET') }} (expected: 10000)"

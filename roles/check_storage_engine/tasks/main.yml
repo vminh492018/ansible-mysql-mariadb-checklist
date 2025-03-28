@@ -1,0 +1,72 @@
+---
+# 6. Storage Engine
+- name: Check default storage engine configuration
+  ansible.builtin.shell: more /etc/my.cnf | grep default-storage-engine
+  register: storage_engine_config
+  ignore_errors: true
+  changed_when: false
+  failed_when: false
+
+- name: Get default storage engine from MySQL
+  ansible.builtin.shell: |
+    mysql -uroot -p{{ mysql_root_password }} -e "SHOW VARIABLES LIKE 'default_storage_engine';"
+  register: storage_engine_raw
+  changed_when: false
+  ignore_errors: true
+
+- name: Parse default storage engine result
+  ansible.builtin.set_fact:
+    storage_engine: "{{ (storage_engine_raw.stdout_lines[1] | regex_replace('\\s+', ' ')).split(' ')[1] }}"
+  when: storage_engine_raw.stdout_lines | length > 1
+
+- name: Get tables not using InnoDB
+  ansible.builtin.shell: |
+    mysql -uroot -p{{ mysql_root_password }} -e "
+      SELECT table_schema, table_name, engine, table_rows
+      FROM information_schema.tables
+      WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'test')
+      AND engine != 'InnoDB';"
+  register: non_innodb_tables_raw
+  changed_when: false
+  ignore_errors: true
+
+- name: Parse non-InnoDB tables result
+  ansible.builtin.set_fact:
+    non_innodb_tables: "{{ non_innodb_tables_raw.stdout_lines | select('match', '^\\|') | map('regex_replace', '^\\|\\s*(.+?)\\s*\\|\\s*(.+?)\\s*\\|\\s*(.+?)\\s*\\|\\s*(.+?)\\s*\\|$', '\\1,\\2,\\3,\\4') | map('split', ',') | list }}"
+  when: non_innodb_tables_raw.stdout_lines | length > 0
+
+- name: Validate storage engine configuration
+  block:
+    - name: Verify default storage engine is InnoDB
+      ansible.builtin.assert:
+        that: storage_engine == 'InnoDB'
+        msg: "Default storage engine is not InnoDB"
+
+    - name: Verify no tables are using non-InnoDB engines
+      ansible.builtin.assert:
+        that: non_innodb_tables | length == 0
+        msg: "Some tables are not using InnoDB storage engine"
+
+- name: Set facts based on storage engine checks
+  block:
+    - name: PASS if storage engine configuration is correct
+      ansible.builtin.set_fact:
+        check_storage_engine: "PASS"
+      when: >
+        storage_engine == 'InnoDB' and
+        non_innodb_tables | length == 0
+
+    - name: FAIL if storage engine configuration is incorrect
+      ansible.builtin.set_fact:
+        check_storage_engine: "FAIL"
+      when: >
+        storage_engine != 'InnoDB' or
+        non_innodb_tables | length > 0
+
+- name: Output detailed results after the checking process is finished
+  ansible.builtin.debug:
+    msg:
+      - "Storage Engine Check: {{ check_storage_engine }}"
+      - "Default Storage Engine: {{ storage_engine }}"
+      - "Non-InnoDB Tables: {{ non_innodb_tables | map(attribute='1') | list if non_innodb_tables | length > 0 else 'None' }}"
+      - "Storage Engine Config: {{ storage_engine_config.stdout if storage_engine_config is defined else 'N/A' }}"

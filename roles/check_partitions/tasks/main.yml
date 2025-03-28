@@ -1,0 +1,46 @@
+---
+# 2. Check Partitions
+- name: Checking datadir partition on MySQL/MariaDB server...
+  ansible.builtin.command:
+    cmd: "mysql -uroot -p{{ mysql_root_password }} -e 'SHOW VARIABLES LIKE \"datadir\";'"
+  register: datadir_partition
+  changed_when: false
+  failed_when: false
+
+- name: Checking log partitions on MySQL/MariaDB server...
+  ansible.builtin.command:
+    cmd: "mysql -uroot -p{{ mysql_root_password }} -e \"SHOW VARIABLES LIKE '%log%'\""
+  register: log_partition
+  changed_when: false
+  failed_when: false
+
+- name: Checking backup partitions on MySQL/MariaDB server...
+  ansible.builtin.shell:
+    cmd: "ls -l / | grep backup"
+  register: backup_partition
+  changed_when: false
+  failed_when: false
+
+- name: Set facts based on partition checks
+  block:
+    - name: PASS if all partitions are correctly mounted
+      ansible.builtin.set_fact:
+        check_partitions: "PASS"
+      when:
+        - "'/u01' in (datadir_partition.stdout | regex_replace('\\s+', ''))"
+        - "'/logs' in (log_partition.stdout | regex_replace('\\s+', ''))"
+        - "'/backup' in (backup_partition.stdout | regex_replace('\\s+', ''))"
+
+    - name: FAIL if any partition is not correctly mounted
+      ansible.builtin.set_fact:
+        check_partitions: "FAIL"
+      when: >
+        "'/u01' not in (datadir_partition.stdout | regex_replace('\\s+', ''))" or
+        "'/logs' not in (log_partition.stdout | regex_replace('\\s+', ''))" or
+        "'/backup' not in (backup_partition.stdout | regex_replace('\\s+', ''))"
+
+- name: Detailed results are output after the checking process is finished....
+  ansible.builtin.debug:
+    msg:
+      - "Partition Check: {{ check_partitions }}"
+      - "Failure Reason: {% if check_partitions == 'FAIL' %}{% if '/u01' not in (datadir_partition.stdout | regex_replace('\\s+', '')) %}Missing datadir partition /u01 {% endif %}{% if '/logs' not in (log_partition.stdout | regex_replace('\\s+', '')) %}Missing logs partition /logs{% endif %}{% if '/backup' not in (backup_partition.stdout | regex_replace('\\s+', '')) %}Missing backup partition /backup{% endif %}{% else %}No failure{% endif %}"

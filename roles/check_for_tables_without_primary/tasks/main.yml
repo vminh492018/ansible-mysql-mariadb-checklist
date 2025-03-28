@@ -1,0 +1,66 @@
+---
+- name: Check if Galera cluster is enabled
+  command: mysql -uroot -p{{ mysql_root_password }} -NBe "SHOW VARIABLES LIKE 'wsrep_on';"
+  register: galera_check
+  changed_when: false
+  no_log: true
+  ignore_errors: yes
+
+- name: Set galera_enabled fact
+  set_fact:
+    galera_enabled: "{{ galera_check.stdout_lines[0].split('\t')[1] == 'ON' if galera_check.stdout_lines else false }}"
+
+- name: Check tables without primary keys (only if Galera cluster)
+  command: >
+    mysql -uroot -p{{ mysql_root_password }} -NBe "
+    SELECT tables.table_schema, 
+           tables.table_name, 
+           tables.table_rows 
+    FROM   information_schema.tables 
+           LEFT JOIN (SELECT table_schema, 
+                             table_name 
+                      FROM   information_schema.statistics 
+                      GROUP  BY table_schema, 
+                                table_name, 
+                                index_name 
+                      HAVING Sum(CASE 
+                                   WHEN non_unique = 0 
+                                        AND nullable != 'YES' THEN 1 
+                                   ELSE 0 
+                                 end) = Count(*)) puks 
+                  ON tables.table_schema = puks.table_schema 
+                     AND tables.table_name = puks.table_name 
+    WHERE  puks.table_name IS NULL 
+           AND tables.table_schema NOT IN ( 'mysql', 'information_schema', 
+                                            'performance_schema', 
+                                            'sys' ) 
+           AND tables.table_type = 'BASE TABLE' 
+           AND engine = 'InnoDB';"
+  register: tables_without_pk
+  changed_when: false
+  no_log: true
+  when: galera_enabled
+
+- name: Set N/A result for non-Galera setups
+  set_fact:
+    check_for_tables_without_primary: "N/A"
+  when: not galera_enabled
+
+- name: Set check result for Galera cluster
+  block:
+    - name: PASS if no tables without primary keys
+      set_fact:
+        check_for_tables_without_primary: "PASS"
+      when: tables_without_pk.stdout == ""
+
+    - name: FAIL if tables without primary keys exist
+      set_fact:
+        check_for_tables_without_primary: "FAIL"
+      when: tables_without_pk.stdout != ""
+  when: galera_enabled
+
+- name: Show final check result
+  debug:
+    msg:
+      - "Primary key check result: {{ check_for_tables_without_primary }}"
+      - "{% if check_for_tables_without_primary == 'FAIL' %}Tables without primary keys:{{ tables_without_pk.stdout_lines }}{% elif check_for_tables_without_primary == 'N/A' %}Not a Galera cluster - check skipped{% else %}All InnoDB tables have primary keys (Galera compliant){% endif %}"

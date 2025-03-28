@@ -1,0 +1,38 @@
+- name: Get MySQL variables related to binlog
+  command: mysql -uroot -p{{ mysql_root_password }} -NBe "show variables where variable_name in('log_bin', 'expire_logs_days', 'binlog_format', 'max_binlog_size');"
+  register: mysql_vars
+  changed_when: false
+  no_log: true
+
+- name: Parse MySQL variables into a dictionary
+  set_fact:
+    current_vars: "{{ current_vars | default({}) | combine({line.split('\t')[0]: line.split('\t')[1]}) }}"
+  loop: "{{ mysql_vars.stdout_lines }}"
+  loop_control:
+    loop_var: line
+
+- name: Set facts after checking
+  block:
+    - name: PASS if all values match
+      ansible.builtin.set_fact:
+        check_binlog_conf: "PASS"
+      when:
+        - current_vars.log_bin == "ON"
+        - current_vars.expire_logs_days | float == 7
+        - current_vars.binlog_format == "ROW"
+        - current_vars.max_binlog_size == "536870912"
+
+    - name: FAIL if any value doesn't match
+      ansible.builtin.set_fact:
+        check_binlog_conf: "FAIL"
+      when: check_binlog_conf is not defined
+
+- name: Detailed results are output after the checking process is finished
+  ansible.builtin.debug:
+    msg:
+      - "Binlog configuration check: {{ check_binlog_conf }}"
+      - "Current values:"
+      - "log_bin: {{ current_vars.log_bin }} (expected: ON)"
+      - "expire_logs_days: {{ current_vars.expire_logs_days }} (expected: 7)"
+      - "binlog_format: {{ current_vars.binlog_format }} (expected: ROW)"
+      - "max_binlog_size: {{ current_vars.max_binlog_size }} (expected: 536870912)"

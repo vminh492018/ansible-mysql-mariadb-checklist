@@ -1,0 +1,41 @@
+---
+- name: Check for fragmented tables in MySQL
+  command: >
+    mysql -uroot -p{{ mysql_root_password }} -NBe "
+    SELECT ENGINE,
+      concat(TABLE_SCHEMA, '.', TABLE_NAME) as table_name,
+      round(DATA_LENGTH/1024/1024, 2) as data_length,
+      round(INDEX_LENGTH/1024/1024, 2) as index_length,
+      round(DATA_FREE/1024/1024, 2) as data_free,
+      (DATA_FREE/(INDEX_LENGTH+DATA_LENGTH)*100) as frag_ratio
+    FROM information_schema.tables
+    WHERE DATA_FREE/(INDEX_LENGTH+DATA_LENGTH)*100 > 50
+    AND TABLE_SCHEMA NOT IN ('mysql','sysbench','information_schema','performance_schema','sys','vsystem')
+    ORDER BY frag_ratio DESC;"
+  register: fragmented_tables
+  changed_when: false
+  no_log: true
+
+- name: Debug fragmented tables result
+  debug:
+    var: fragmented_tables.stdout_lines
+  when: fragmented_tables.stdout_lines | length > 0
+
+- name: Set check result based on fragmented tables
+  set_fact:
+    check_for_fragmented_tables: "{{ 'PASS' if fragmented_tables.stdout_lines | length == 0 else 'FAIL' }}"
+
+- name: Show fragmentation check result
+  debug:
+    msg:
+      - "Fragmentation check: {{ check_for_fragmented_tables }}"
+      - "Expected result: No fragmented tables (frag_ratio > 50%)"
+      - "Found {{ fragmented_tables.stdout_lines | length }} fragmented tables" 
+      - "Details:"
+      - "{{ fragmented_tables.stdout_lines }}"
+  when: check_for_fragmented_tables == 'FAIL'
+
+- name: Confirm no fragmented tables found
+  debug:
+    msg: "No fragmented tables found (frag_ratio > 50%) - Check PASSED"
+  when: check_for_fragmented_tables == 'PASS'
